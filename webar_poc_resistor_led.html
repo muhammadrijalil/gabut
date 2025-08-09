@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>WebAR POC - Rangkaian Resistor + LED (Marker-based)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- A-Frame -->
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <!-- AR.js (A-Frame version) -->
+  <script src="https://raw.githack.com/AR-js-org/AR.js/3.3.2/aframe/build/aframe-ar.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: system-ui, Arial; }
+    #ui {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: 14px;
+      background: rgba(0,0,0,0.45);
+      color: white;
+      padding: 10px; border-radius: 10px;
+      display: flex; flex-direction: column; gap: 8px; z-index: 9999;
+      backdrop-filter: blur(4px);
+    }
+    #ui label { font-size: 14px; }
+    #ui input[type=range] { width: 100%; }
+    #info { font-size: 13px; }
+    #hint { position: fixed; top: 8px; left: 8px; background: rgba(255,255,255,0.9); color: black; padding: 6px 8px; border-radius: 6px; font-size:13px; }
+  </style>
+</head>
+<body>
+<div id="hint">Tunjukkan <b>Hiro marker</b> (cari "hiro marker" di web) ke kamera. Gunakan Chrome (Android) / Safari (iOS).</div>
+
+<!-- UI overlay -->
+<div id="ui">
+  <label>Nilai Resistor: <span id="rVal">220</span> Ω</label>
+  <input id="resSlider" type="range" min="100" max="1000" value="220" step="10" />
+  <div id="info">V = <span id="voltage">12.0</span> V — Arus I = <span id="current">0.055</span> A — LED Intensity = <span id="ledVal">0.5</span></div>
+</div>
+
+<!-- A-Frame scene with AR.js marker-based -->
+<a-scene embedded arjs='sourceType: webcam; debugUIEnabled: false;' vr-mode-ui="enabled: false">
+
+  <!-- marker (Hiro) -->
+  <a-marker preset="hiro">
+    <!-- Coordinate frame: we create a simple linear arrangement: battery -> wire -> resistor -> wire -> LED -->
+    <a-entity id="circuitRoot" position="0 0 0" rotation="-90 0 0" scale="0.06 0.06 0.06">
+
+      <!-- Battery (power supply) -->
+      <a-box id="battery" depth="12" height="8" width="6" color="#222" position="-40 0 0"></a-box>
+      <a-text value="12V" color="#fff" align="center" position="-40 -6 0" rotation="90 0 0" width="40"></a-text>
+
+      <!-- Wire to resistor (visual) -->
+      <a-cylinder id="wire1" radius="0.6" height="32" color="#b29759" position="-24 0 0" rotation="0 0 90"></a-cylinder>
+
+      <!-- Resistor (represented as a box with bands) -->
+      <a-box id="resistor" depth="6" height="6" width="8" color="#c97d3a" position="-4 0 0"></a-box>
+      <!-- resistor value text -->
+      <a-text id="resText" value="R = 220Ω" align="center" color="#000" position="-4 -6 0" rotation="90 0 0" width="60"></a-text>
+
+      <!-- Wire to LED -->
+      <a-cylinder id="wire2" radius="0.6" height="32" color="#b29759" position="16 0 0" rotation="0 0 90"></a-cylinder>
+
+      <!-- LED (as small sphere with emissive material + a small plane as LED face) -->
+      <a-sphere id="led" radius="3" color="#ffcc00" position="36 0 0" material="emissive: #ffff88; emissiveIntensity: 0.5;"></a-sphere>
+      <a-cone id="ledFace" height="1.6" radius-bottom="1.2" radius-top="0.1" color="#fff" position="36 2.6 0" rotation="90 0 0"></a-cone>
+      <a-text value="LED" color="#000" align="center" position="36 -6 0" rotation="90 0 0" width="60"></a-text>
+
+      <!-- Return wire (to battery negative) -->
+      <a-cylinder id="wire3" radius="0.6" height="64" color="#b29759" position="-40 -8 0" rotation="0 0 0"></a-cylinder>
+
+      <!-- Particle group for current animation: we create several small spheres and animate their position along the path -->
+      <a-entity id="particles">
+        <!-- we'll generate and control these with JS for speed/interval -->
+      </a-entity>
+
+      <!-- a small point light to illuminate scene, will be adjusted by current -->
+      <a-light id="ledLight" type="point" intensity="0.6" distance="50" position="36 0 0" color="#ffeaa7"></a-light>
+
+    </a-entity>
+  </a-marker>
+
+  <a-entity camera></a-entity>
+</a-scene>
+
+
+<script>
+// Basic simulation parameters
+const V = 12.0; // supply voltage in volts
+let R = 220; // initial resistor in ohm
+const ledBase = 0.2; // base emissive intensity
+const maxParticles = 8; // number of particle spheres to animate
+
+// DOM elements
+const slider = document.getElementById('resSlider');
+const rValSpan = document.getElementById('rVal');
+const volSpan = document.getElementById('voltage');
+const curSpan = document.getElementById('current');
+const ledValSpan = document.getElementById('ledVal');
+const resText = document.getElementById('resText');
+
+volSpan.innerText = V.toFixed(1);
+
+// Create particle spheres and store their state
+const particlesRoot = document.getElementById('particles');
+let particles = [];
+
+AFRAME.registerComponent('particle-move', {
+  schema: {
+    pathStart: {type: 'vec3'},
+    pathEnd: {type: 'vec3'},
+    speed: {type: 'number', default: 1},
+    offset: {type:'number', default:0}
+  },
+  init: function() {
+    this.t = this.data.offset;
+  },
+  tick: function(time, delta) {
+    const dt = delta / 1000; // seconds
+    this.t += dt * this.data.speed;
+    let s = (this.t % 1.0); // loop 0..1
+    // linear interpolation between start and end
+    const sx = this.data.pathStart.x + (this.data.pathEnd.x - this.data.pathStart.x) * s;
+    const sy = this.data.pathStart.y + (this.data.pathEnd.y - this.data.pathStart.y) * s;
+    const sz = this.data.pathStart.z + (this.data.pathEnd.z - this.data.pathStart.z) * s;
+    this.el.setAttribute('position', `${sx} ${sy} ${sz}`);
+  }
+});
+
+// Generate particles along the wire path from battery to LED
+function createParticles() {
+  // clear
+  particlesRoot.innerHTML = '';
+  particles = [];
+  // define path start and end in circuitRoot local coordinates
+  const start = {x: -28, y: 0, z: 0};
+  const end = {x: 36, y: 0, z: 0};
+  for (let i=0;i<maxParticles;i++) {
+    const s = i / maxParticles;
+    const p = document.createElement('a-sphere');
+    p.setAttribute('radius', '0.8');
+    p.setAttribute('color', '#00bfff');
+    p.setAttribute('position', `${start.x} ${start.y} ${start.z}`);
+    p.setAttribute('particle-move', `pathStart: ${start.x} ${start.y} ${start.z}; pathEnd: ${end.x} ${end.y} ${end.z}; speed: 0.5; offset: ${s}`);
+    particlesRoot.appendChild(p);
+    particles.push(p);
+  }
+}
+
+// compute current, update UI and visual effects
+function updateSimulation() {
+  // Prevent divide by zero
+  const safeR = Math.max(R, 1);
+  const I = V / safeR; // Ampere
+  // update UI
+  rValSpan.innerText = R;
+  curSpan.innerText = I.toFixed(3);
+  ledValSpan.innerText = Math.min(1.0, (I * 5)).toFixed(2); // normalized for display
+
+  // update resistor text
+  resText.setAttribute('value', `R = ${R}Ω`);
+
+  // update particle speed based on current (scale to reasonable speed)
+  const speed = Math.min(4.0, Math.max(0.2, I * 30));
+  particles.forEach((p) => {
+    p.setAttribute('particle-move', `pathStart: -28 0 0; pathEnd: 36 0 0; speed: ${speed}; offset: 0`);
+  });
+
+  // update LED emissive intensity and light intensity
+  const led = document.getElementById('led');
+  const ledLight = document.getElementById('ledLight');
+  const intensity = Math.min(3.0, ledBase + I * 8); // tweak factor for visible effect
+  led.setAttribute('material', `emissive: #ffff88; emissiveIntensity: ${intensity.toFixed(3)};`);
+  ledLight.setAttribute('intensity', (0.3 + intensity).toFixed(3));
+}
+
+// initialize
+createParticles();
+updateSimulation();
+
+// slider handler
+slider.addEventListener('input', (e) => {
+  R = parseInt(e.target.value);
+  updateSimulation();
+});
+
+// ensure simulation updates periodically in case component ticks need sync
+setInterval(updateSimulation, 200);
+</script>
+</body>
+</html>
