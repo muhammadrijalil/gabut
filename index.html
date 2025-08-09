@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>AR Lamp Example</title>
+    <title>AR Lamp Example with 3D Model</title>
     <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
     <script src="https://cdn.rawgit.com/jeromeetienne/AR.js/master/aframe/build/aframe-ar.js"></script>
     <style>
@@ -18,9 +18,9 @@
       <a-marker preset="hiro">
         <a-entity
           id="lamp"
+          gltf-model="lamp.glb"
+          scale="0.5 0.5 0.5"
           position="0 0 0"
-          geometry="primitive: box; width: 0.5; height: 1; depth: 0.5;"
-          material="color: gray;"
         ></a-entity>
         <a-entity
           id="light"
@@ -32,7 +32,6 @@
     </a-scene>
 
     <script>
-      const lamp = document.getElementById("lamp");
       const light = document.getElementById("light");
 
       // Fungsi untuk menyalakan lampu
@@ -41,7 +40,7 @@
       }
 
       // Tambahkan event listener untuk marker
-      lamp.addEventListener("click", turnOnLight);
+      document.querySelector("#lamp").addEventListener("click", turnOnLight);
     </script>
   </body>
 </html>
